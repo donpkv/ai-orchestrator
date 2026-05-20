@@ -1,0 +1,23 @@
+{
+  "name": "local-ai-orchestrator",
+  "version": "1.0.0",
+  "description": "Cursor SDK orchestrator for the AI Workflow Orchestrator K8s project",
+  "scripts": {
+    "setup": "npm install && echo 'Done. Copy .env.example to .env and add your CURSOR_API_KEY'",
+    "run-subtask": "ts-node scripts/run-subtask.ts",
+    "list-agents": "ts-node scripts/list-agents.ts",
+    "resume-agent": "ts-node scripts/resume-agent.ts"
+  },
+  "dependencies": {
+    "@cursor/sdk": "latest",
+    "dotenv": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "ts-node": "latest",
+    "typescript": "latest"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

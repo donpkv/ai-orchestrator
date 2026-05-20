@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    background: radial-gradient(
+      ellipse at top,
+      rgba(30, 41, 59, 0.4) 0%,
+      transparent 50%
+    ), #020617;
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-slate-900/40 backdrop-blur-xl border border-slate-800/50 rounded-2xl;
+  }
+  .btn-primary {
+    @apply px-5 py-2.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 active:bg-indigo-600
+           text-white font-medium text-sm transition-all
+           disabled:opacity-50 disabled:cursor-not-allowed
+           shadow-lg shadow-indigo-500/20;
+  }
+  .input {
+    @apply w-full px-3 py-2 rounded-lg bg-slate-900/60 border border-slate-700/60
+           text-slate-100 placeholder-slate-500
+           focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500/40
+           transition-all;
+  }
+}

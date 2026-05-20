@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-create-topics
+  namespace: ai-orchestrator
+spec:
+  backoffLimit: 12
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-topics
+          image: apache/kafka:3.7.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              BOOTSTRAP="kafka-svc.ai-orchestrator.svc.cluster.local:9092"
+              echo "Waiting for Kafka at ${BOOTSTRAP}..."
+              for i in $(seq 1 72); do
+                if kafka-broker-api-versions.sh --bootstrap-server "${BOOTSTRAP}" >/dev/null 2>&1; then
+                  echo "Kafka is reachable."
+                  break
+                fi
+                if [ "${i}" -eq 72 ]; then
+                  echo "Timed out waiting for Kafka." >&2
+                  exit 1
+                fi
+                sleep 5
+              done
+              for topic in job-submitted job-routed job-completed; do
+                kafka-topics.sh \
+                  --create \
+                  --if-not-exists \
+                  --bootstrap-server "${BOOTSTRAP}" \
+                  --topic "${topic}" \
+                  --partitions 3 \
+                  --replication-factor 1
+              done
+              echo "Topics ensured: job-submitted, job-routed, job-completed"

@@ -1,0 +1,39 @@
+server:
+  port: 8082
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+spring:
+  threads:
+    virtual:
+      enabled: true
+  application:
+    name: job-worker
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka-svc:9092}
+    consumer:
+      group-id: job-worker-group
+      auto-offset-reset: earliest
+
+workflow:
+  controller:
+    url: ${WORKFLOW_CONTROLLER_URL:http://workflow-controller-svc:8081}
+
+ollama:
+  base-url: ${OLLAMA_BASE_URL:http://ollama-svc:11434}
+
+qdrant:
+  host: ${QDRANT_HOST:qdrant-svc}
+  port: ${QDRANT_PORT:6333}

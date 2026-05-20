@@ -1,0 +1,39 @@
+# Dependencies — rebuilt via npm install
+node_modules/
+
+# Secrets — never commit
+.env
+
+# TypeScript build output
+dist/
+
+# Java/Maven build output
+orchestrator-parent/**/target/
+*.jar
+*.war
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Minikube local state
+.minikube/
+
+# Database backups — large files, machine-specific, never commit
+backups/
+
+# Local runtime data for infrastructure services
+postgres/
+qdrant/
+
+# Cursor IDE agent working files
+.cursor/

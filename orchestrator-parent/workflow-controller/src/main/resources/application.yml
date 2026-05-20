@@ -1,0 +1,39 @@
+server:
+  port: 8081
+
+spring:
+  threads:
+    virtual:
+      enabled: true
+  application:
+    name: workflow-controller
+  # Shard JDBC URLs are read from environment variables (configured in JpaConfig beans):
+  #   DB_SHARD_A_URL — PostgreSQL URL for shard A (optional default in code)
+  #   DB_SHARD_B_URL — PostgreSQL URL for shard B (optional default in code)
+  #   DB_USER, DB_PASSWORD — credentials for both shards
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+  redis:
+    host: redis-svc
+    port: 6379
+  data:
+    redis:
+      host: ${spring.redis.host}
+      port: ${spring.redis.port}
+  kafka:
+    bootstrap-servers: kafka-svc:9092
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+qdrant:
+  host: ${QDRANT_HOST:qdrant-svc}
+  port: ${QDRANT_PORT:6333}
+
+ollama:
+  base-url: ${OLLAMA_BASE_URL:http://ollama-svc:11434}

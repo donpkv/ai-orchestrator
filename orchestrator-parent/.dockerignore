@@ -1,0 +1,9 @@
+target/
+.git/
+.mvn/repository
+*.md
+node_modules/
+.env
+.env.*
+backups/
+*.sql

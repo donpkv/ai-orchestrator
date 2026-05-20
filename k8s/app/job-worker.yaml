@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: job-worker-config
+  namespace: ai-orchestrator
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-svc:9092"
+  WORKFLOW_CONTROLLER_URL: "http://workflow-controller-svc:8081"
+  OLLAMA_BASE_URL: "http://ollama-svc:11434"
+  QDRANT_HOST: "qdrant-svc"
+  QDRANT_PORT: "6333"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-worker
+  namespace: ai-orchestrator
+  labels:
+    app: job-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: job-worker
+  template:
+    metadata:
+      labels:
+        app: job-worker
+    spec:
+      containers:
+        - name: job-worker
+          image: local-ai/job-worker:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8082
+          envFrom:
+            - configMapRef:
+                name: job-worker-config
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 45
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: job-worker-svc
+  namespace: ai-orchestrator
+spec:
+  type: ClusterIP
+  selector:
+    app: job-worker
+  ports:
+    - port: 8082
+      targetPort: 8082
