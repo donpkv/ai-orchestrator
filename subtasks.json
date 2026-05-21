@@ -161,6 +161,105 @@
       "agentId": "agent-cf759603-44c9-49ec-ba66-b4a15a8399bc",
       "lastRunAt": "2026-05-17T17:20:05.446Z",
       "prompt": "You are working inside the folder: c:\\Users\\piyushvi\\Downloads\\project\\local-ai-orchestrator\\orchestrator-parent\\\n\nTask: Wire the complete async AI routing pipeline. The HTTP request must return instantly. The job-worker reads from Kafka, embeds the description, checks Qdrant cache, calls Ollama only on cache miss, stores embedding in Qdrant, then updates the job status and workerType via HTTP back to workflow-controller.\n\nIMPORTANT DESIGN: Option B -- Ollama and Qdrant are called by job-worker AFTER Kafka delivery, NOT during the HTTP request.\n\n--- PART 1: workflow-controller changes ---\n\n1. Update workflow-controller/src/main/java/com/orchestrator/controller/service/JobService.java:\n   - In submitJob(): REMOVE the OllamaService.route() call and all workerType/routingDecision enrichment\n   - submitJob() should only: generate UUID, compute shardKey, build Job (workerType=null, routingDecision=null), save to PostgreSQL, cache status in Redis, publish to Kafka, return JobResponse\n   - Keep all sharding, Redis caching, and Kafka publishing logic unchanged\n   - REMOVE OllamaService injection from constructor (it is no longer needed here)\n\n2. Add a new endpoint to workflow-controller for the job-worker to report routing results:\n   - Add to workflow-controller/src/main/java/com/orchestrator/controller/service/JobServicePort.java:\n     void updateJobRouting(UUID id, String workerType, String routingDecision)\n   - Add to workflow-controller/src/main/java/com/orchestrator/controller/service/JobService.java:\n     public void updateJobRouting(UUID id, String workerType, String routingDecision)\n     a. Compute shardKey, setShard, findById (throw NOT_FOUND if missing)\n     b. job.setWorkerType(workerType)\n     c. job.setRoutingDecision(routingDecision)\n     d. job.setStatus(\"ROUTED\")\n     e. jobRepository.save(job)\n     f. cachePutStatus(id, \"ROUTED\")\n     g. ShardContextHolder.clear() in finally\n   - Add to workflow-controller/src/main/java/com/orchestrator/controller/web/JobController.java:\n     PATCH /api/v1/jobs/{id}/routing\n     Accepts @RequestBody JobRoutingUpdateRequest (a new record with fields: String workerType, String routingDecision)\n     Calls jobServicePort.updateJobRouting(id, body.workerType(), body.routingDecision())\n     Returns 204 No Content\n   - Create workflow-controller/src/main/java/com/orchestrator/controller/web/JobRoutingUpdateRequest.java:\n     public record JobRoutingUpdateRequest(@NotBlank String workerType, String routingDecision) {}\n\n3. Add \"ROUTED\" as a valid status between PENDING and COMPLETED so dashboard can show routing progress.\n   No code change needed -- it is just a string value. Document it in the existing JobConstants.java by adding:\n   public static final String STATUS_ROUTED = \"ROUTED\";\n\n--- PART 2: job-worker changes ---\n\n4. Add dependencies to job-worker/pom.xml:\n   - spring-boot-starter-web (for RestTemplate and HTTP client use)\n   - spring-boot-starter-data-redis (to share EmbeddingService/QdrantService via HTTP -- actually just needs RestTemplate)\n   - Actually only add: spring-boot-starter-web if not already present\n\n5. Copy/create the AI service classes in job-worker (they cannot import from workflow-controller -- different module):\n   - Create job-worker/src/main/java/com/orchestrator/worker/ai/EmbeddingService.java:\n     Exact copy of workflow-controller EmbeddingService -- same logic, same RestTemplate injection, same Ollama embed API call\n   - Create job-worker/src/main/java/com/orchestrator/worker/ai/OllamaService.java:\n     Exact copy of workflow-controller OllamaService and RoutingDecision -- same logic\n   - Create job-worker/src/main/java/com/orchestrator/worker/ai/RoutingDecision.java:\n     Exact copy of workflow-controller RoutingDecision record\n   - Create job-worker/src/main/java/com/orchestrator/worker/ai/QdrantService.java:\n     Exact copy of workflow-controller QdrantService -- same REST API calls\n\n6. Create job-worker/src/main/java/com/orchestrator/worker/config/AiConfig.java:\n   - @Configuration class\n   - @Bean(name = \"ollamaRestTemplate\"): SimpleClientHttpRequestFactory with connectTimeout=5000, readTimeout=30000\n   - @Bean(name = \"qdrantBaseUrl\"): reads QDRANT_HOST (default qdrant-svc) and QDRANT_PORT (default 6333), returns \"http://host:port\"\n   - @Bean(name = \"qdrantCollectionName\"): returns \"job-embeddings\"\n   - @Bean ObjectMapper: returns new ObjectMapper()\n\n7. Update job-worker/src/main/java/com/orchestrator/worker/messaging/JobEventConsumer.java:\n   Replace the current simple consumer (Thread.sleep + PATCH status COMPLETED) with the full AI routing pipeline:\n   - Inject EmbeddingService, QdrantService, OllamaService, RestTemplate (default), @Value(\"${workflow.controller.url}\") String controllerUrl\n   - In handleJobSubmitted(String message):\n     a. Parse jobId AND description from Kafka message JSON\n     b. Step 1 -- Embed: float[] vector = embeddingService.embed(description)\n     c. Step 2 -- Check Qdrant: Optional<String> cached = qdrantService.findSimilarRouting(vector)\n     d. Step 3a -- Cache HIT: workerType = cached.get(), routingDecision = \"{\\\"source\\\":\\\"qdrant-cache\\\",\\\"workerType\\\":\\\"\" + workerType + \"\\\"}\"\n     e. Step 3b -- Cache MISS: RoutingDecision decision = ollamaService.route(description); workerType = decision.workerType(); routingDecision = decision.toJson(); then call qdrantService.storeJobEmbedding(jobId, vector, workerType)\n     f. Step 4 -- PATCH routing to workflow-controller: PATCH {controllerUrl}/api/v1/jobs/{jobId}/routing body: {\"workerType\":\"<wt>\",\"routingDecision\":\"<rd>\"}\n     g. Step 5 -- Simulate execution: Thread.sleep(2000)\n     h. Step 6 -- PATCH status COMPLETED: PATCH {controllerUrl}/api/v1/jobs/{jobId}/status body: {\"status\":\"COMPLETED\"}\n     i. Log each step with jobId\n     j. Wrap entire method in try/catch -- on any failure log and skip to COMPLETED to avoid stuck jobs\n\n8. Update job-worker/src/main/resources/application.yml:\n   - Add ollama.base-url: ${OLLAMA_BASE_URL:http://ollama-svc:11434}\n   - Add qdrant.host: ${QDRANT_HOST:qdrant-svc}\n   - Add qdrant.port: ${QDRANT_PORT:6333}\n\n9. Create docs/phase3-end-to-end.md explaining:\n   - The two-phase job lifecycle: PENDING (HTTP returns) -> ROUTED (job-worker routes) -> COMPLETED (job-worker executes)\n   - Why Ollama is called by job-worker not workflow-controller (async, user does not wait)\n   - The Qdrant cache hit/miss flow and why it saves LLM calls\n   - The three Kafka topics and what flows through each now\n   - The full sequence from POST /api/v1/jobs to COMPLETED with timestamps\n\nDo not run any commands. Only create or modify files."
+    },
+    {
+      "id": "6.1",
+      "phase": "observability",
+      "title": "OpenTelemetry + Jaeger (Distributed Tracing)",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: Add opentelemetry-spring-boot-starter to all 3 modules; deploy Jaeger all-in-one pod; configure OTLP exporter; trace flows from api-gateway -> workflow-controller -> kafka -> job-worker -> qdrant -> ollama."
+    },
+    {
+      "id": "6.2",
+      "phase": "observability",
+      "title": "Prometheus + Grafana (Metrics)",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: Add micrometer-registry-prometheus to all 3 modules; expose /actuator/prometheus; deploy Prometheus with scrape_configs; deploy Grafana with dashboards for JVM, Kafka lag, Qdrant cache hits, Ollama latency."
+    },
+    {
+      "id": "6.3",
+      "phase": "observability",
+      "title": "Fluent Bit + Loki (Centralized Logging)",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: Deploy Fluent Bit DaemonSet to tail /var/log/containers; ship logs to Loki; configure Grafana Loki datasource for unified metrics + logs view."
+    },
+    {
+      "id": "6b.1",
+      "phase": "rag-ingestion",
+      "title": "RAG Ingestion Microservice",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: New Spring Boot module rag-ingestion; POST /api/v1/docs accepts PDF/TXT; Apache Tika parsing; 512-token chunks with 64-token overlap; embed each chunk via nomic-embed-text; upsert to Qdrant knowledge-base collection with source/page/chunkIndex metadata."
+    },
+    {
+      "id": "6b.2",
+      "phase": "rag-ingestion",
+      "title": "Job Worker RAG Context Injection",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: Add RagContextService to job-worker; before calling Mistral 7B query knowledge-base collection for top-3 similar chunks; inject retrieved text as context into Ollama prompt to improve domain-specific routing accuracy."
+    },
+    {
+      "id": "7.1",
+      "phase": "security",
+      "title": "Keycloak Identity Provider Deployment",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: Deploy Keycloak pod in ai-orchestrator namespace; create realm orchestrator; create client api-gateway (confidential); define roles: admin, submitter, viewer; create test users for each role."
+    },
+    {
+      "id": "7.2",
+      "phase": "security",
+      "title": "API Gateway OAuth2 Resource Server (JWT)",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: Add spring-security-oauth2-resource-server + jose to api-gateway; configure jwk-set-uri pointing to Keycloak realm; validate JWT on every request; extract X-User-Id and X-Roles headers from claims before forwarding downstream."
+    },
+    {
+      "id": "7.3",
+      "phase": "security",
+      "title": "RBAC in Workflow Controller",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: Add spring-boot-starter-security to workflow-controller; read X-Roles header (set by api-gateway); @PreAuthorize on endpoints: POST /jobs requires submitter, GET /jobs requires any role, admin can PATCH status."
+    },
+    {
+      "id": "8.1",
+      "phase": "kafka-security",
+      "title": "Kafka NetworkPolicy",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: Create k8s/infra/kafka/kafka-network-policy.yaml restricting port 9092 ingress to only workflow-controller and job-worker pods."
+    },
+    {
+      "id": "8.2",
+      "phase": "kafka-security",
+      "title": "Kafka SASL/SCRAM-SHA-512 + ACLs",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: Enable SASL_PLAINTEXT with SCRAM-SHA-512 on Kafka; create kafka-sasl-credentials Secret; update workflow-controller and job-worker ConfigMaps with sasl.jaas.config; add ACLs: workflow-controller WRITE on job-submitted, job-worker READ on job-submitted."
+    },
+    {
+      "id": "9.1",
+      "phase": "cicd",
+      "title": "GitHub Actions CI/CD Pipeline",
+      "status": "pending",
+      "agentId": null,
+      "lastRunAt": null,
+      "prompt": "TODO: Create .github/workflows/ci.yml; on push to main: mvn test all modules, docker build all 4 images, push to ghcr.io/donpkv/ai-orchestrator with :latest and :sha-<commit> tags; update k8s image references from local-ai/* to ghcr.io/donpkv/*."
     }
   ]
 }

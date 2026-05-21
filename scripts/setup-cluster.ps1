@@ -7,7 +7,30 @@
     Verifies Minikube is installed, starts the cluster with the configured resources,
     waits until the API is usable, creates the application namespace, prints status,
     and enables metrics-server and ingress addons.
+
+    Default allocation: 18 GB RAM, 6 CPUs.
+    Override with parameters:
+        .\setup-cluster.ps1 -MemoryMb 20480 -Cpus 8
+
+    Memory guidance (phases already implemented or planned):
+        Current system (11 pods):   ~11-12 GB
+        + Phase 6  (observability): +1.3 GB  -> ~13-13.5 GB
+        + Phase 6b (RAG ingestion): +0.4 GB  -> ~13.5-14 GB
+        + Phase 7  (Keycloak/JWT):  +0.5 GB  -> ~14-14.5 GB
+        Recommended minimum: 18 GB (leaves 3.5 GB buffer for Ollama spikes)
+        Safe maximum for 32 GB host: 24 GB
+
+    After minikube delete + re-create:
+        Run .\scripts\deploy-infra.ps1  (copies Ollama models from Windows host cache)
+        Run .\scripts\deploy-apps.ps1   (rebuilds and loads Docker images)
+        No internet re-downloads required if models exist at %USERPROFILE%\.ollama\models
 #>
+
+param(
+    [int]$MemoryMb = 18432,   # 18 GB — safe headroom for all planned phases
+    [int]$Cpus     = 6,
+    [string]$DiskSize = "40g"
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -59,12 +82,12 @@ if (Test-Path $minikubeMachinesDir) {
     Remove-Item -Path $minikubeMachinesDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "`nStarting Minikube (driver=docker, cpus=6, memory=15000MB, disk=40g)..." -ForegroundColor Cyan
+Write-Host "`nStarting Minikube (driver=docker, cpus=$Cpus, memory=${MemoryMb}MB, disk=$DiskSize)..." -ForegroundColor Cyan
 minikube start `
     --driver=docker `
-    --cpus=6 `
-    --memory=15000 `
-    --disk-size=40g
+    --cpus=$Cpus `
+    --memory=$MemoryMb `
+    --disk-size=$DiskSize
 if ($LASTEXITCODE -ne 0) {
     Write-Host "minikube start failed." -ForegroundColor Red
     exit $LASTEXITCODE
