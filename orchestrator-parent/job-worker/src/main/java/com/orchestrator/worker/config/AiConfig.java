@@ -12,9 +12,10 @@ public class AiConfig {
 
     @Bean(name = "ollamaRestTemplate")
     public RestTemplate ollamaRestTemplate() {
+        // Mistral 7B on CPU cold-start can take 90-180s — use generous timeout
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(5_000);
-        factory.setReadTimeout(30_000);
+        factory.setReadTimeout(180_000);
         return new RestTemplate(factory);
     }
 

@@ -83,6 +83,8 @@ public class QdrantService {
             return;
         }
         try {
+            ensureCollectionExists(embedding.length);
+
             String url = qdrantBaseUrl + "/collections/" + collectionName + "/points";
 
             Map<String, Object> payload = new HashMap<>();
@@ -102,9 +104,37 @@ public class QdrantService {
             HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
 
             restTemplate.put(url, request);
-            log.debug("Stored embedding for job {} in Qdrant", jobId);
+            log.info("Stored embedding for job {} in Qdrant collection '{}'", jobId, collectionName);
         } catch (Exception e) {
             log.warn("Failed to upsert job embedding to Qdrant: {}", e.getMessage());
+        }
+    }
+
+    private void ensureCollectionExists(int vectorSize) {
+        try {
+            String checkUrl = qdrantBaseUrl + "/collections/" + collectionName;
+            restTemplate.getForObject(checkUrl, String.class);
+        } catch (Exception e) {
+            // Collection doesn't exist — create it
+            try {
+                String createUrl = qdrantBaseUrl + "/collections/" + collectionName;
+                Map<String, Object> vectorsConfig = new HashMap<>();
+                vectorsConfig.put("size", vectorSize);
+                vectorsConfig.put("distance", "Cosine");
+
+                Map<String, Object> body = new HashMap<>();
+                body.put("vectors", vectorsConfig);
+
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.APPLICATION_JSON);
+                HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+
+                restTemplate.put(createUrl, request);
+                log.info("Created Qdrant collection '{}' with size={} distance=Cosine",
+                        collectionName, vectorSize);
+            } catch (Exception ce) {
+                log.warn("Failed to create Qdrant collection '{}': {}", collectionName, ce.getMessage());
+            }
         }
     }
 

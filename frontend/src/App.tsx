@@ -6,11 +6,23 @@ import { JobForm } from "./components/JobForm";
 import { JobTable } from "./components/JobTable";
 
 const POLL_INTERVAL_MS = 3000;
+const STATUS_FILTERS = ["ALL", "PENDING", "ROUTED", "COMPLETED", "FAILED"] as const;
+type StatusFilter = typeof STATUS_FILTERS[number];
+
+function dedupeById(jobs: JobResponse[]): JobResponse[] {
+  const seen = new Map<string, JobResponse>();
+  for (const job of jobs) {
+    // keep the latest version of each job (list is already sorted newest-first)
+    if (!seen.has(job.id)) seen.set(job.id, job);
+  }
+  return Array.from(seen.values());
+}
 
 export default function App() {
   const [jobs, setJobs] = useState<JobResponse[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
 
   const refresh = useCallback(async () => {
     try {
@@ -19,7 +31,7 @@ export default function App() {
         (a, b) =>
           new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime(),
       );
-      setJobs(sorted);
+      setJobs(dedupeById(sorted));
       setError(null);
       setLastSync(new Date());
     } catch (err) {
@@ -34,9 +46,12 @@ export default function App() {
   }, [refresh]);
 
   function handleSubmitted(job: JobResponse) {
-    setJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
+    setJobs((prev) => dedupeById([job, ...prev.filter((j) => j.id !== job.id)]));
     refresh();
   }
+
+  const filteredJobs =
+    statusFilter === "ALL" ? jobs : jobs.filter((j) => j.status === statusFilter);
 
   return (
     <div className="min-h-screen px-6 py-10 max-w-6xl mx-auto">
@@ -70,9 +85,31 @@ export default function App() {
         <Stats jobs={jobs} />
       </section>
 
+      {/* Status filter bar */}
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {STATUS_FILTERS.map((f) => (
+          <button
+            key={f}
+            onClick={() => setStatusFilter(f)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+              statusFilter === f
+                ? "bg-indigo-500 text-white"
+                : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+            }`}
+          >
+            {f}
+            {f !== "ALL" && (
+              <span className="ml-1.5 opacity-60">
+                {jobs.filter((j) => j.status === f).length}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
       <section className="grid lg:grid-cols-[400px_1fr] gap-6">
         <JobForm onSubmitted={handleSubmitted} />
-        <JobTable jobs={jobs} />
+        <JobTable jobs={filteredJobs} />
       </section>
 
       {error && (

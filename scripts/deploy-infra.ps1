@@ -160,10 +160,12 @@ kubectl apply -f k8s/infra/ollama/ollama.yaml
 Wait-Pods -Label "app=ollama" -TimeoutSeconds 300
 Write-Host "  Ollama is Ready." -ForegroundColor Green
 
-# Check if mistral:7b is already loaded on the PVC
-Write-Host "  Checking if mistral:7b is loaded..." -ForegroundColor Gray
+# Check and pull required Ollama models
 $ollamaPod = kubectl get pod -n ai-orchestrator -l app=ollama -o jsonpath='{.items[0].metadata.name}' 2>$null
 $modelList = kubectl exec -n ai-orchestrator $ollamaPod -- ollama list 2>$null
+
+# --- mistral:7b ---
+Write-Host "  Checking if mistral:7b is loaded..." -ForegroundColor Gray
 if ($modelList -match "mistral") {
     Write-Host "  mistral:7b is loaded and ready." -ForegroundColor Green
 } else {
@@ -173,7 +175,6 @@ if ($modelList -match "mistral") {
         Write-Host "  Copying model files to pod (this takes 2-5 minutes)..." -ForegroundColor Gray
         Set-Location $ollamaModelsPath\..
         kubectl cp .\models "${ollamaPod}:/root/.ollama/models" -n ai-orchestrator
-        # Fix path if models landed one level deep
         kubectl exec -n ai-orchestrator $ollamaPod -- sh -c "[ -d /root/.ollama/models/models ] && mv /root/.ollama/models/models/* /root/.ollama/models/ && rmdir /root/.ollama/models/models || true" 2>$null
         $modelList2 = kubectl exec -n ai-orchestrator $ollamaPod -- ollama list 2>$null
         if ($modelList2 -match "mistral") {
@@ -184,6 +185,33 @@ if ($modelList -match "mistral") {
     } else {
         Write-Host "  Windows Ollama cache not found at $ollamaModelsPath" -ForegroundColor Red
         Write-Host "  Run: ollama pull mistral:7b  then re-run deploy-infra.ps1" -ForegroundColor Yellow
+    }
+}
+
+# --- nomic-embed-text (required for Qdrant vector embeddings) ---
+Write-Host "  Checking if nomic-embed-text is loaded..." -ForegroundColor Gray
+$modelList3 = kubectl exec -n ai-orchestrator $ollamaPod -- ollama list 2>$null
+if ($modelList3 -match "nomic-embed-text") {
+    Write-Host "  nomic-embed-text is loaded and ready." -ForegroundColor Green
+} else {
+    Write-Host "  nomic-embed-text not found. Copying from Windows Ollama cache..." -ForegroundColor Yellow
+    Write-Host "  (Direct pull blocked by corporate TLS inspection — pull on Windows host first)" -ForegroundColor Gray
+    $ollamaModelsPath = "$env:USERPROFILE\.ollama\models"
+    if (Test-Path $ollamaModelsPath) {
+        Set-Location "$env:USERPROFILE\.ollama"
+        kubectl cp .\models "${ollamaPod}:/root/.ollama/models" -n ai-orchestrator
+        $modelList4 = kubectl exec -n ai-orchestrator $ollamaPod -- ollama list 2>$null
+        if ($modelList4 -match "nomic-embed-text") {
+            Write-Host "  nomic-embed-text copied and ready." -ForegroundColor Green
+        } else {
+            Write-Host "  Copy done but model not detected. Run manually on Windows host:" -ForegroundColor Yellow
+            Write-Host "    ollama pull nomic-embed-text" -ForegroundColor Yellow
+            Write-Host "  Then re-run this script." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  Windows Ollama cache not found. Run on Windows host first:" -ForegroundColor Red
+        Write-Host "    ollama pull nomic-embed-text" -ForegroundColor Yellow
+        Write-Host "  Then re-run this script." -ForegroundColor Yellow
     }
 }
 

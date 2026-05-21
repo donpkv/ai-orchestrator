@@ -77,7 +77,7 @@ All components run as Kubernetes pods inside a Minikube cluster on the developer
 |---|---|
 | Ollama | Local LLM runtime |
 | Mistral 7B | Model for task decomposition and routing |
-| nomic-embed-text | Embedding model (384-dim vectors) |
+| nomic-embed-text | Embedding model (768-dim vectors) |
 
 ### Frontend (Phase 5)
 | Technology | Purpose |
@@ -120,39 +120,46 @@ swap=4GB
 
 ```
 local-ai-orchestrator/
-├── docs/                          # Project documentation
+├── README.md                      # Project overview with live screenshots
+├── docs/
 │   ├── PROJECT.md                 # This file — full project reference
-│   └── phase1-setup.md            # Phase 1 Minikube setup guide
-├── k8s/                           # Kubernetes manifests (created in phases 1.2–1.6)
+│   ├── DIAGRAMS.md                # All 11 Mermaid diagrams (combined view)
+│   ├── WORK_PROOF_LOGS.md         # Real execution logs from all pods
+│   ├── diagrams/                  # Individual diagram .md + rendered .png files
+│   │   ├── diagram-01-system-architecture.md
+│   │   ├── diagram-02-sequence-cache-miss.md
+│   │   ├── ... (11 total)
+│   │   ├── images/                # PNG renders of all diagrams
+│   │   └── render-diagrams.ps1    # Re-render script (uses mmdc)
+│   ├── screenshots/               # Live system screenshots (frontend, kafka, qdrant, etc.)
+│   ├── phase1-*.md                # Phase 1 component setup guides
+│   ├── phase4-*.md                # Phase 4 deployment guides
+│   └── phase4-smoke-test.md
+├── k8s/
 │   ├── infra/
-│   │   ├── postgres/              # PostgreSQL shard-a and shard-b
+│   │   ├── postgres/              # PostgreSQL shard-a and shard-b (StatefulSets + PVCs)
 │   │   ├── redis/                 # Redis deployment
-│   │   ├── kafka/                 # Kafka KRaft deployment
+│   │   ├── kafka/                 # Kafka KRaft StatefulSet
 │   │   ├── qdrant/                # Qdrant vector DB
-│   │   └── ollama/                # Ollama LLM runtime
-│   └── app/                       # Spring Boot app deployments
-│       ├── gateway.yaml
+│   │   └── ollama/                # Ollama LLM runtime (10Gi PVC)
+│   └── app/
+│       ├── api-gateway.yaml       # Spring Cloud Gateway + ConfigMap
 │       ├── workflow-controller.yaml
-│       └── job-worker.yaml
-├── orchestrator-parent/           # Maven multi-module Java project (Phase 2)
-│   ├── pom.xml
-│   ├── common/                    # Shared DTOs and utilities
-│   ├── api-gateway/               # Spring Cloud Gateway
-│   ├── workflow-controller/       # Core orchestration engine
-│   └── job-worker/                # Kafka consumer + job executor
-├── frontend/                      # React dashboard (Phase 5)
-├── scripts/                       # Automation scripts
-│   ├── setup-cluster.ps1          # Start Minikube + configure everything
-│   ├── teardown-cluster.ps1       # Stop Minikube + clean up
-│   ├── run-subtask.ts             # Cursor SDK agent runner
-│   ├── list-agents.ts             # Show all subtask statuses
-│   └── resume-agent.ts            # Resume a previous agent by ID
-├── subtasks.json                  # Subtask registry (id, prompt, status, agentId)
-├── package.json                   # Node.js dependencies for orchestrator scripts
-├── tsconfig.json                  # TypeScript config
-├── .env                           # Local secrets (never committed)
-├── .env.example                   # Template for .env
-└── .gitignore                     # Excludes node_modules, .env, target/, dist/
+│       ├── job-worker.yaml
+│       └── frontend.yaml          # Nginx + React static build
+├── orchestrator-parent/           # Maven multi-module Java project
+│   ├── pom.xml                    # Parent BOM (Java 21, Spring Boot 3.x)
+│   ├── api-gateway/               # Spring Cloud Gateway (port 8080)
+│   ├── workflow-controller/       # Job API + sharding + Kafka publisher (port 8081)
+│   └── job-worker/                # Kafka consumer + AI pipeline (port 8082)
+├── frontend/                      # React 18 + TypeScript + Vite + Tailwind + Nginx
+├── scripts/
+│   ├── deploy-infra.ps1           # Deploy infra pods + Ollama model setup
+│   ├── deploy-apps.ps1            # Build images → load → rollout + port-forward
+│   ├── safe-shutdown.ps1          # Graceful cluster teardown
+│   └── smoke-test.ps1             # End-to-end job submission validation
+├── .env.example                   # Template for local secrets
+└── .gitignore                     # Excludes .env, target/, dist/, node_modules/
 ```
 
 ---
@@ -279,7 +286,7 @@ Kafka StatefulSet running at `kafka-svc:9092`. Topics: `job-submitted`, `job-rou
 
 ### Phase 1.5 — Qdrant Vector DB Deployment (COMPLETE)
 Files: `k8s/infra/qdrant/qdrant.yaml`, `create-collection.sh`
-Qdrant running at `qdrant-svc:6333` (REST) and `:6334` (gRPC), 2Gi PVC. Collection `job-embeddings` (384-dim, Cosine) created after port-forward.
+Qdrant running at `qdrant-svc:6333` (REST) and `:6334` (gRPC), 2Gi PVC. Collection `job-embeddings` (768-dim, Cosine) auto-created by QdrantService on first upsert.
 
 ### Phase 1.6 — Ollama Deployment (COMPLETE)
 Files: `k8s/infra/ollama/ollama.yaml`, `pull-model.sh`
@@ -317,10 +324,10 @@ Files: `controller/config/ThreadConfig.java`, `worker/config/ThreadConfig.java`,
 `TomcatProtocolHandlerCustomizer` replaces Tomcat's fixed thread pool with `Executors.newVirtualThreadPerTaskExecutor()` in `workflow-controller`. `spring.threads.virtual.enabled: true` added to both modules. Each HTTP request and each Kafka listener callback now runs on a dedicated virtual thread — I/O waits (DB, Redis, Kafka) suspend the virtual thread without holding an OS thread.
 ### Phase 3.1 — Qdrant Client Integration (COMPLETE)
 Files: `config/QdrantConfig.java`, `ai/EmbeddingService.java`, `ai/QdrantService.java`, `docs/phase3-qdrant-integration.md`
-REST-based Qdrant client (port 6333, no gRPC dependency conflicts). `EmbeddingService` calls Ollama `nomic-embed-text` to embed job descriptions into 384-dim float vectors. `QdrantService` searches for similar past jobs (threshold 0.9) and stores new embeddings. Build fix: replaced `io.qdrant:qdrant-client` (wrong artifactId, gRPC conflicts) with plain RestTemplate calling Qdrant REST API.
+REST-based Qdrant client (port 6333, no gRPC dependency conflicts). `EmbeddingService` calls Ollama `nomic-embed-text` to embed job descriptions into 384-dim float vectors. `QdrantService` searches for similar past jobs (threshold 0.9) and stores new embeddings. Vector dimension auto-detected from embedding output (768 for nomic-embed-text v1). Build fix: replaced `io.qdrant:qdrant-client` (wrong artifactId, gRPC conflicts) with plain RestTemplate calling Qdrant REST API.
 ### Phase 3.2 — Ollama LLM Routing Service (COMPLETE)
 Files: `ai/OllamaService.java`, `ai/RoutingDecision.java`, `config/OllamaRestTemplateConfig.java`, updated `Job.java`, updated `JobService.java`, updated `JobResponse.java`, updated `init-jobs-table.sql`, `docs/phase3-ollama-routing.md`
-Calls Mistral 7B via `POST /api/generate` with a structured JSON-only prompt. Extracts JSON from model output using `indexOf('{')` + `lastIndexOf('}')`. Dedicated `ollamaRestTemplate` bean with 30s read timeout. `defaultDecision()` fallback ensures job submission never fails due to LLM unavailability. Build fix: replaced `RestTemplateBuilder.connectTimeout(Duration)` (removed in Spring Boot 3.2) with `SimpleClientHttpRequestFactory.setConnectTimeout(int)`.
+Calls Mistral 7B via `POST /api/generate` with a structured JSON-only prompt. Extracts JSON from model output using `indexOf('{')` + `lastIndexOf('}')`. Dedicated `ollamaRestTemplate` bean with 180s read timeout (increased from 30s to handle Mistral 7B CPU cold-start). `defaultDecision()` fallback ensures job submission never fails due to LLM unavailability. Build fix: replaced `RestTemplateBuilder.connectTimeout(Duration)` (removed in Spring Boot 3.2) with `SimpleClientHttpRequestFactory.setConnectTimeout(int)`.
 ### Phase 3.3 — End-to-End AI Routing Flow (COMPLETE)
 Files: updated `JobService.java` (removed sync Ollama call), `web/JobRoutingUpdateRequest.java`, updated `JobController.java` (PATCH /routing), updated `JobServicePort.java`, updated `JobEventConsumer.java` (full AI pipeline), `worker/ai/EmbeddingService.java`, `worker/ai/OllamaService.java`, `worker/ai/QdrantService.java`, `worker/ai/RoutingDecision.java`, `worker/config/AiConfig.java`, `docs/phase3-end-to-end.md`
 Full async pipeline: HTTP returns instantly (PENDING, ~15ms). job-worker reads from Kafka, embeds description via nomic-embed-text, checks Qdrant cache (threshold 0.9), calls Mistral 7B only on miss, stores new embedding in Qdrant, PATCHes workflow-controller /routing (ROUTED), simulates work, PATCHes /status (COMPLETED). Three-stage job lifecycle: PENDING -> ROUTED -> COMPLETED.
@@ -349,9 +356,15 @@ Smoke test now validates: all pods Running, NodePort URL resolves, POST /api/v1/
 | `kubectl wait` matching admission Job pods (`ingress-nginx-admission-create-*`) | Label selector `app.kubernetes.io/name=ingress-nginx` matches both controller and one-time Jobs | Narrowed selector to `app.kubernetes.io/component=controller` |
 | Amdocs IT compliance force-rebooted machine after `wsl --update` | `wsl --update` replaced certified Amdocs WSL kernel with vanilla Microsoft one; compliance scanner triggered enforcement | Re-installed Amdocs-certified WSL image via `000-wsl.ps1`. Documented Hyper-V backend as long-term alternative for corporate machines |
 
-### Phase 5.1 — React Frontend (PENDING)
-### Phase 6 — Observability (PENDING)
-### Phase 7 — CI/CD + GitHub (PENDING)
+### Phase 5.1 — React Frontend (COMPLETE)
+Files: `frontend/src/App.tsx`, `frontend/src/components/JobForm.tsx`, `frontend/src/components/JobTable.tsx`, `frontend/nginx.conf`, `frontend/vite.config.ts`, `frontend/Dockerfile`, `k8s/app/frontend.yaml`
+React 18 + TypeScript + Tailwind CSS + Vite dashboard. Nginx serves static build and reverse-proxies `/api/*` to `api-gateway-svc` (FQDN for Kubernetes DNS). Features: live stats (TOTAL/PENDING/ROUTED/COMPLETED counters), status filter bar, expandable job rows with routing details, deduplication, submit form with priority slider. Port-forwarded to `localhost:3000` via `deploy-apps.ps1`.
+
+### Phase 6 — Observability (PLANNED)
+OpenTelemetry + Jaeger + Prometheus + Grafana stack. Not yet implemented.
+
+### Phase 7 — CI/CD + GitHub (IN PROGRESS)
+Repository: `https://github.com/donpkv/ai-orchestrator`. Initial push complete. GitHub Actions CI pipeline planned.
 
 ---
 
@@ -371,9 +384,9 @@ Implemented via Spring's `AbstractRoutingDataSource`. Read queries check both sh
 
 | Topic | Producer | Consumer | Carries |
 |---|---|---|---|
-| `job-submitted` | workflow-controller | job-worker | New job accepted by API |
-| `job-routed` | workflow-controller | job-worker | Sub-tasks after LLM routing |
-| `job-completed` | job-worker | workflow-controller | Sub-task completion events |
+| `job-submitted` | workflow-controller | job-worker | Full job payload (UUID, description, priority) after API acceptance |
+
+> `job-routed` and `job-completed` were planned for Phase 1 but replaced with direct REST PATCH calls in the implemented pipeline — job-worker calls `PATCH /api/v1/jobs/{id}/status` on the workflow-controller to update state, avoiding the need for additional topics.
 
 ---
 
@@ -445,7 +458,7 @@ minikube dashboard
 ```
 # First time setup
 git init
-git remote add origin https://github.com/piyushvi/local-ai-orchestrator.git
+git remote add origin https://github.com/donpkv/ai-orchestrator.git
 git add .
 git commit -m "Phase 0+1.1: orchestrator setup and Minikube cluster"
 git push -u origin main

@@ -41,7 +41,7 @@ export function JobTable({ jobs }: { jobs: JobResponse[] }) {
 
   return (
     <div className="glass overflow-hidden">
-      <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 px-5 py-3 text-xs uppercase tracking-wider text-slate-500 border-b border-slate-800/60">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] gap-4 px-5 py-3 text-xs uppercase tracking-wider text-slate-500 border-b border-slate-800/60">
         <div>Description</div>
         <div>Status</div>
         <div>Worker</div>
@@ -55,9 +55,9 @@ export function JobTable({ jobs }: { jobs: JobResponse[] }) {
             <div key={job.id}>
               <button
                 onClick={() => setExpanded(isExpanded ? null : job.id)}
-                className="w-full grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 px-5 py-3 text-left hover:bg-slate-800/30 transition-colors items-center"
+                className="w-full grid grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] gap-4 px-5 py-3 text-left hover:bg-slate-800/30 transition-colors items-center"
               >
-                <div className="truncate text-slate-200">{job.description}</div>
+                <div className="truncate text-slate-200 min-w-0">{job.description}</div>
                 <StatusBadge status={job.status} />
                 <div className="text-xs font-mono text-slate-400">
                   {job.workerType ?? "—"}

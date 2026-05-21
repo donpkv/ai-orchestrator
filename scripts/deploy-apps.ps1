@@ -129,3 +129,30 @@ if ($gwUrl) {
 }
 
 Write-Host "`nDeploy apps completed successfully." -ForegroundColor Green
+
+# ===========================================================================
+# Port-forward frontend to localhost:3000 (background job)
+# ===========================================================================
+Write-Host "`nStarting port-forward: frontend -> http://localhost:3000 ..." -ForegroundColor Cyan
+
+# Kill any existing port-forward on 3000
+Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match "port-forward.*3000" } | Stop-Process -Force -ErrorAction SilentlyContinue
+
+$pfFrontend = Start-Job {
+    kubectl port-forward svc/frontend-svc -n ai-orchestrator 3000:8083
+}
+Start-Sleep -Seconds 3
+
+Write-Host "  Frontend:  http://localhost:3000" -ForegroundColor Green
+Write-Host "  API:       http://localhost:3000/api/v1/jobs" -ForegroundColor Green
+Write-Host ""
+Write-Host "Port-forward is running in the background. Press Ctrl+C to stop." -ForegroundColor Yellow
+Write-Host "To stop port-forward manually: Get-Job | Stop-Job; Get-Job | Remove-Job" -ForegroundColor Gray
+
+# Keep port-forward alive in foreground
+try {
+    Wait-Job $pfFrontend | Out-Null
+} finally {
+    Stop-Job $pfFrontend -ErrorAction SilentlyContinue
+    Remove-Job $pfFrontend -ErrorAction SilentlyContinue
+}
